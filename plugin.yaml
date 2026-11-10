@@ -1,0 +1,61 @@
+name: hostd-client
+version: "0.1.0rc1"
+author: Violet Software
+license: MIT
+manifest_version: 2
+description: Request command execution from a separately managed hermes-hostd daemon
+requires_hermes: ">=0.22.5"
+platforms: [linux]
+tags: [incus, host, approval, vsock]
+provides_tools:
+  - run_on_host
+provides_hooks: []
+# No built-in override, LLM override or gateway platform-action grants.
+# Remote command authority is disclosed in README; it is not a capability ID.
+capabilities: []
+requires_env: []
+optional_env:
+  - HOSTD_TRANSPORT
+  - HOSTD_VSOCK_PORT
+  - HOSTD_HTTP_URL
+  - HOSTD_AUTH_TOKEN
+  - HOSTD_AUTH_TOKEN_FILE
+python_dependencies: []
+config_schema:
+  max_response_bytes:
+    type: int
+    default: 1048576
+    required: false
+    description: "Positive finite response-byte ceiling before decoding/parsing, including VSOCK newline. Default 1 MiB accommodates bounded daemon tails and ordinary metadata/errors."
+  auth_token_file:
+    type: str
+    required: false
+    description: "Path only: private owned 0600 requester-token file. Never put the secret value in public settings. HOSTD_AUTH_TOKEN then HOSTD_AUTH_TOKEN_FILE override this path."
+  insecure_no_auth:
+    type: bool
+    default: false
+    required: false
+    description: "Explicit acknowledgment: disable requester authentication for a deliberately unsecured daemon. Warns; never selected when credentials are missing."
+  transport:
+    type: str
+    default: vsock
+    required: false
+    description: "Transport: vsock or http. Legacy hostd-client.yaml and HOSTD_TRANSPORT take precedence."
+  vsock_port:
+    type: int
+    default: 9999
+    required: false
+    description: "Host CID 2 VSOCK port. Must match the separately managed daemon."
+  http_url:
+    type: str
+    # Loopback is the Hermes machine/network namespace, not a VM/container's host.
+    # Use the local daemon here, or configure an endpoint/external SSH local forward.
+    default: http://127.0.0.1:9998/execute
+    required: false
+    description: >-
+      Full HTTP endpoint. Loopback refers to the machine/network namespace running
+      Hermes, not the physical host when Hermes runs in a VM/container. No URL
+      override is needed for a local daemon at the default endpoint. Otherwise
+      explicitly configure the daemon endpoint, or establish an external SSH local
+      forward and configure this URL to match its local listening port. The plugin
+      does not establish tunnels automatically. No credentials in URLs.

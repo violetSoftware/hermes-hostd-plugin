@@ -1,0 +1,11 @@
+# NONSECRET legacy flat config for an already established SSH local forward.
+# Copy deliberately to $HERMES_HOME/hostd-client.yaml; do not include credentials.
+transport: http
+# Loopback is the Hermes machine/network namespace, not the physical VM/container host.
+# Establish SSH externally first: local port 19998 forwards to daemon port 9998.
+# This URL matches that local listening port, not the HTTP fallback port 9998.
+# The plugin does not establish tunnels automatically.
+http_url: http://127.0.0.1:19998/execute
+
+# Provision a matching private requester-token file (0600) outside Git.
+auth_token_file: /absolute/private/directory/requester.token

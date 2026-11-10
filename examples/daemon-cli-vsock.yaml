@@ -1,0 +1,13 @@
+# NONSECRET host-side example; requires a VSOCK-capable host/guest pair.
+log_level: INFO
+transport:
+  # Provision this private token file before startup; no secret value here.
+  auth_token_file: /absolute/private/directory/requester.token
+  type: vsock
+  port: 9999
+approval:
+  type: cli
+  timeout: 30
+executor:
+  allowlist:
+    - /usr/bin/printf

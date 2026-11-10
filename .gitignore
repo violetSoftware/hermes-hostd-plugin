@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.env
+.env.*
+*.yaml
+*.yml
+!plugin.yaml
+# Only reviewed NONSECRET setup examples; keep other runtime YAML ignored.
+!examples/hostd-client-vsock.yaml
+!examples/hostd-client-http-ssh.yaml
+!examples/daemon-cli-http.yaml
+!examples/daemon-cli-vsock.yaml
+*.key
+*.pem
+*.db
+*.log

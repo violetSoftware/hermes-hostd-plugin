@@ -1,0 +1,7 @@
+# NONSECRET legacy flat config: copy deliberately to $HERMES_HOME/hostd-client.yaml.
+# No quoting or inline comments: the compatibility parser is not a YAML parser.
+transport: vsock
+vsock_port: 9999
+
+# Provision a matching private requester-token file (0600) outside Git.
+auth_token_file: /absolute/private/directory/requester.token

@@ -1,0 +1,14 @@
+# NONSECRET host-side example; not a plugin config and not a service installer.
+log_level: INFO
+transport:
+  # Provision this private token file before startup; no secret value here.
+  auth_token_file: /absolute/private/directory/requester.token
+  type: http
+  host: 127.0.0.1
+  port: 9998
+approval:
+  type: cli
+  timeout: 30
+executor:
+  allowlist:
+    - /usr/bin/printf
