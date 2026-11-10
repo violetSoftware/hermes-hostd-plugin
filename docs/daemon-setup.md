@@ -17,7 +17,7 @@ In an operator-controlled host terminal, after installing and reviewing the daem
 python /path/to/reviewed/hermes-hostd/hostd.py --config /path/to/host-owned/daemon-cli-http.yaml
 ```
 
-Use an explicit existing config path: daemon source falls back to other config locations when the supplied path is missing. The CLI approver uses `/dev/tty`; keep it attached to the operator's terminal. Without a controlling terminal it denies requests. Finite approval timeout is intended to deny unanswered requests; this checkpoint did not test daemon terminal behavior or concurrency. Do not convert this baseline to unattended systemd operation or indefinite approval waits.
+Use an explicit existing config path. When `--config` is supplied, a missing, empty, unreadable, nonregular or invalid selection fails startup with a bounded error; it never falls back to discovery. Configuration discovery occurs only when `--config` is absent. The CLI approver uses `/dev/tty`; keep it attached to the operator's terminal. Without a controlling terminal it denies requests. Finite approval timeout is intended to deny unanswered requests; this checkpoint did not test daemon terminal behavior or concurrency. Do not convert this baseline to unattended systemd operation or indefinite approval waits.
 
 ## Externally managed HTTP-over-SSH
 
