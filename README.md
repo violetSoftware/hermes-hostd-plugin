@@ -1,6 +1,6 @@
 # Hermes Hostd Plugin
 
-Version 0.1.0rc1 is a **local release checkpoint**, not a published or accepted catalog release. This source checkpoint registers only `run_on_host` in toolset `hostd`, using public `ctx.register_tool` APIs. The client is bundled and uses only the Python standard library; hermes-hostd is a separate host-side installation.
+Version 0.1.0rc2 migrates requester credentials to Hermes-managed secrets; catalog admission is pending. The plugin registers only `run_on_host` in toolset `hostd`, using public `ctx.register_tool` APIs. The bundled transport client uses only the Python standard library; plugin credential resolution requires Hermes. hermes-hostd is a separate host-side installation.
 
 ## Installation and configuration
 
