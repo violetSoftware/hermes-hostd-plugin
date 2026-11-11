@@ -58,6 +58,58 @@ FUNCTIONS = {item["function"]["name"]: item["function"] for item in DEFINITIONS}
 
 
 class DefinitionTests(unittest.TestCase):
+    def test_managed_secret_is_resolved_lazily_for_each_routed_call(self):
+        from agent.secret_scope import set_secret_scope, reset_secret_scope
+        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+        from unittest.mock import patch
+        profile = HOME / 'managed-profile'
+        profile.mkdir(exist_ok=True)
+        context = PluginContext(manifest, manager)
+        with patch('hermes_cli.plugins.load_config_readonly', return_value={}):
+            plugin.register(context)
+        override = set_hermes_home_override(profile)
+        try:
+            with patch.dict(os.environ, {'HOSTD_AUTH_TOKEN': 'synthetic-process-only'}):
+                for token in ('synthetic-profile-one', 'synthetic-profile-two'):
+                    scope = set_secret_scope({'HOSTD_AUTH_TOKEN': token}, profile_home=str(profile))
+                    try:
+                        for transport in ('http', 'vsock'):
+                            with patch.dict(os.environ, {'HOSTD_TRANSPORT': transport}):
+                                self.assertTrue(plugin._build_client().transport.auth_token == token)
+                    finally:
+                        reset_secret_scope(scope)
+        finally:
+            reset_hermes_home_override(override)
+            plugin._PLUGIN_SETTINGS.clear()
+
+    def test_legacy_context_selector_is_rejected_even_with_managed_secret(self):
+        import json
+        from agent.secret_scope import set_secret_scope, reset_secret_scope
+        from unittest.mock import patch
+        assert manifest is not None
+        settings = {'plugins': {'entries': {'hostd-client': {'settings': {
+            'auth_token_file': '/synthetic-secret-path-never-open'}}}}}
+        scope = set_secret_scope({'HOSTD_AUTH_TOKEN': 'synthetic-context-token'})
+        try:
+            with patch('hermes_cli.plugins.load_config_readonly', return_value=settings):
+                plugin.register(PluginContext(manifest, manager))
+            result = registry.get_entry('run_on_host').handler({'command': ['echo']})
+            self.assertIs(json.loads(result)['success'], False)
+            self.assertIn('removed', result)
+            self.assertNotIn('/synthetic-secret-path', result)
+        finally:
+            reset_secret_scope(scope)
+            plugin._PLUGIN_SETTINGS.clear()
+
+    def test_manifest_declares_managed_credential_only(self):
+        assert manifest is not None
+        self.assertEqual(manifest.requires_env, ['HOSTD_AUTH_TOKEN'])
+        text = (PLUGIN / 'plugin.yaml').read_text()
+        optional = text.split('optional_env:', 1)[1].split('python_dependencies:', 1)[0]
+        self.assertNotIn('HOSTD_AUTH_TOKEN', optional)
+        self.assertNotIn('auth_token_file', manifest.config_schema)
+        self.assertEqual(manifest.version, '0.1.0rc2')
+
     def test_only_run_on_host_with_exactly_one_provider_wrapper(self):
         self.assertEqual(set(FUNCTIONS), {'run_on_host'})
         self.assertEqual(len(DEFINITIONS), 1)
@@ -135,15 +187,15 @@ class DefinitionTests(unittest.TestCase):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         from unittest.mock import patch
         token = 'synthetic-context-requester'
-        secret = HOME / 'requester.token'
-        secret.write_text(token + '\n')
-        secret.chmod(0o600)
+        from agent.secret_scope import set_secret_scope, reset_secret_scope
+        scope = set_secret_scope({'HOSTD_AUTH_TOKEN': token})
+        self.addCleanup(reset_secret_scope, scope)
         context = PluginContext(manifest, manager)
         settings = {'plugins': {'entries': {'hostd-client': {'settings': {
-            'transport': 'http', 'auth_token_file': str(secret)}}}}}
+            'transport': 'http'}}}}}
         with patch('hermes_cli.plugins.load_config_readonly', return_value=settings):
             plugin.register(context)
-        self.assertEqual(plugin._PLUGIN_SETTINGS['auth_token_file'], str(secret))
+        self.assertNotIn('auth_token_file', manifest.config_schema)
         self.assertNotIn(token, repr(plugin._PLUGIN_SETTINGS))
         seen = []
         class Handler(BaseHTTPRequestHandler):
@@ -215,12 +267,12 @@ class DefinitionTests(unittest.TestCase):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         from unittest.mock import patch
         token = 'synthetic-malformed-response-credential'
-        secret = HOME / 'malformed-response.token'
-        secret.write_text(token + '\n')
-        secret.chmod(0o600)
+        from agent.secret_scope import set_secret_scope, reset_secret_scope
+        scope = set_secret_scope({'HOSTD_AUTH_TOKEN': token})
+        self.addCleanup(reset_secret_scope, scope)
         context = PluginContext(manifest, manager)
         settings = {'plugins': {'entries': {'hostd-client': {'settings': {
-            'auth_token_file': str(secret)}}}}}
+            'transport': 'http'}}}}}
         with patch('hermes_cli.plugins.load_config_readonly', return_value=settings):
             plugin.register(context)
         entry = registry.get_entry('run_on_host')
@@ -283,54 +335,70 @@ class DefinitionTests(unittest.TestCase):
             thread.join(2)
             plugin._PLUGIN_SETTINGS.clear()
 
-    def test_selected_empty_file_source_fails_closed_through_real_context(self):
+    def test_scoped_missing_empty_invalid_and_unscoped_fail_closed(self):
+        import contextlib
+        import io
+        import json
+        import logging
+        from agent.secret_scope import (set_secret_scope, reset_secret_scope,
+            set_multiplex_context, reset_multiplex_context)
+        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+        from unittest.mock import patch
+        profile = HOME / 'missing-managed-profile'
+        profile.mkdir(exist_ok=True)
+        context = PluginContext(manifest, manager)
+        with patch('hermes_cli.plugins.load_config_readonly', return_value={}):
+            plugin.register(context)
+        entry = registry.get_entry('run_on_host')
+        assert entry is not None
+        override = set_hermes_home_override(profile)
+        multiplex = set_multiplex_context(True)
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        logging.getLogger().addHandler(handler)
+        try:
+            with patch.dict(os.environ, {'HOSTD_AUTH_TOKEN': 'synthetic-process-only'}), patch.object(
+                    plugin._client_mod, 'client_from_config', wraps=plugin._client_mod.client_from_config) as factory:
+                for mapping in ({}, {'HOSTD_AUTH_TOKEN': ''}, {'HOSTD_AUTH_TOKEN': 'synthetic secret\n'},
+                                {'HOSTD_AUTH_TOKEN': 42}, {'HOSTD_AUTH_TOKEN': 'x' * 257}, None):
+                    scope = set_secret_scope(mapping, profile_home=str(profile))
+                    try:
+                        for transport in ('http', 'vsock'):
+                            with patch.dict(os.environ, {'HOSTD_TRANSPORT': transport}), contextlib.redirect_stdout(
+                                    output), contextlib.redirect_stderr(output):
+                                result = entry.handler({'command': ['echo']})
+                            parsed = json.loads(result)
+                            self.assertIs(parsed['success'], False)
+                            self.assertFalse('synthetic' in result)
+                            self.assertLess(len(parsed['error']), 240)
+                    finally:
+                        reset_secret_scope(scope)
+                self.assertFalse('synthetic' in output.getvalue())
+                # No client may be created when resolution or validation fails.
+                factory.assert_not_called()
+        finally:
+            logging.getLogger().removeHandler(handler)
+            reset_multiplex_context(multiplex)
+            reset_hermes_home_override(override)
+            plugin._PLUGIN_SETTINGS.clear()
+
+    def test_secret_resolver_import_and_exception_errors_are_sanitized(self):
+        import builtins
         import json
         from unittest.mock import patch
-        assert manifest is not None
-        context = PluginContext(manifest, manager)
-        config = Path(os.environ['HERMES_HOME']) / 'hostd-client.yaml'
-        secret = HOME / 'override.token'
-        secret.write_text('synthetic-override-token\n')
-        secret.chmod(0o600)
-        def register(settings):
-            value = {'plugins': {'entries': {'hostd-client': {'settings': settings}}}}
-            with patch('hermes_cli.plugins.load_config_readonly', return_value=value):
-                plugin.register(context)
-        previous_cwd = Path.cwd()
-        os.chdir(HOME)
-        try:
-            for source in ('context', 'flat'):
-                for transport in ('http', 'vsock'):
-                    with self.subTest(source=source, transport=transport):
-                        register({'transport': transport, 'insecure_no_auth': True,
-                                  **({'auth_token_file': ''} if source == 'context' else {})})
-                        if source == 'flat':
-                            config.write_text('auth_token_file: \n')
-                        with self.assertRaisesRegex(ValueError, 'private owned regular file'):
-                            plugin._build_client()
-                        entry = registry.get_entry('run_on_host')
-                        assert entry is not None
-                        result = json.loads(entry.handler({'command': ['echo'], 'description': 'synthetic'}))
-                        self.assertIs(result['success'], False)
-                        self.assertIn('private owned regular file', result['error'])
-                        # Higher-priority environment selections still win; disable the
-                        # incompatible insecure flag to test a valid authenticated setup.
-                        register({'transport': transport, 'auth_token_file': ''})
-                        with patch.dict(os.environ, {'HOSTD_AUTH_TOKEN_FILE': str(secret)}):
-                            self.assertTrue(plugin._build_client().transport.auth_token == 'synthetic-override-token')
-                            with patch.dict(os.environ, {'HOSTD_AUTH_TOKEN': 'synthetic-env-override'}):
-                                self.assertTrue(plugin._build_client().transport.auth_token == 'synthetic-env-override')
-                        # Flat-file precedence over empty context selection is retained.
-                        config.write_text('auth_token_file: ' + str(secret) + '\n')
-                        self.assertTrue(plugin._build_client().transport.auth_token == 'synthetic-override-token')
-                        config.unlink()
-                        register({'transport': transport, 'insecure_no_auth': True})
-                        with self.assertLogs(level='WARNING'):
-                            self.assertIsNone(plugin._build_client().transport.auth_token)
-        finally:
-            os.chdir(previous_cwd)
-            config.unlink(missing_ok=True)
-            plugin._PLUGIN_SETTINGS.clear()
+        real_import = builtins.__import__
+        def unavailable(name, *args, **kwargs):
+            if name == 'agent.secret_scope':
+                raise ImportError('synthetic-sensitive-import-error')
+            return real_import(name, *args, **kwargs)
+        with patch('builtins.__import__', side_effect=unavailable):
+            result = plugin._handle_run_on_host({'command': ['echo']})
+        self.assertIs(json.loads(result)['success'], False)
+        self.assertNotIn('synthetic', result)
+        with patch('agent.secret_scope.get_secret', side_effect=RuntimeError('synthetic-sensitive-resolver-error')):
+            result = plugin._handle_run_on_host({'command': ['echo']})
+        self.assertIs(json.loads(result)['success'], False)
+        self.assertNotIn('synthetic', result)
 
     def test_registered_strict_correlated_bounded_results(self):
         import json
@@ -340,12 +408,12 @@ class DefinitionTests(unittest.TestCase):
         helpers = importlib.util.module_from_spec(helper_spec)
         helper_spec.loader.exec_module(helpers)
         context = PluginContext(manifest, manager)
-        secret = HOME / 'strict-response.token'
-        secret.write_text('synthetic-strict-token\n')
-        secret.chmod(0o600)
+        from agent.secret_scope import set_secret_scope, reset_secret_scope
+        scope = set_secret_scope({'HOSTD_AUTH_TOKEN': 'synthetic-strict-token'})
+        self.addCleanup(reset_secret_scope, scope)
         def register(config):
             settings = {'plugins': {'entries': {'hostd-client': {'settings': {
-                **config, 'max_response_bytes': 512, 'auth_token_file': str(secret)}}}}}
+                **config, 'max_response_bytes': 512}}}}}
             with patch('hermes_cli.plugins.load_config_readonly', return_value=settings):
                 plugin.register(context)
         def wire(body, **changes):
@@ -391,12 +459,9 @@ class DefinitionTests(unittest.TestCase):
         profile.mkdir()
         process_config = process_home / 'hostd-client.yaml'
         profile_config = profile / 'hostd-client.yaml'
-        process_secret = process_home / 'process.token'
-        profile_secret = profile / 'profile.token'
-        for path, token in ((process_secret, 'synthetic-process-only'),
-                            (profile_secret, 'synthetic-profile-only')):
-            path.write_text(token + '\n')
-            path.chmod(0o600)
+        from agent.secret_scope import set_secret_scope, reset_secret_scope
+        process_token = 'synthetic-process-only'
+        profile_token = 'synthetic-profile-only'
         seen = []
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -410,8 +475,8 @@ class DefinitionTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
         url = f'http://127.0.0.1:{server.server_port}/execute'
-        for config, secret in ((process_config, process_secret), (profile_config, profile_secret)):
-            config.write_text(f'transport: http\nhttp_url: {url}\nauth_token_file: {secret}\n')
+        for config in (process_config, profile_config):
+            config.write_text(f'transport: http\nhttp_url: {url}\n')
         assert manifest is not None
         context = PluginContext(manifest, manager)
         # Register in the process profile first: resolution must not be cached here.
@@ -420,6 +485,9 @@ class DefinitionTests(unittest.TestCase):
         entry = registry.get_entry('run_on_host')
         assert entry is not None
         override = set_hermes_home_override(profile)
+        scope = set_secret_scope({'HOSTD_AUTH_TOKEN': profile_token}, profile_home=str(profile))
+        process_env = patch.dict(os.environ, {'HOSTD_AUTH_TOKEN': process_token})
+        process_env.start()
         try:
             self.assertEqual(os.environ['HERMES_HOME'], str(process_home))
             self.assertEqual(get_hermes_home(), profile)
@@ -428,17 +496,24 @@ class DefinitionTests(unittest.TestCase):
             self.assertEqual(seen, ['Bearer synthetic-profile-only'])
             self.assertNotIn('synthetic-profile-only', result)
             self.assertNotIn('synthetic-process-only', result)
-            # Missing selected config must not fall back to the process token/file.
+            # Missing selected config must not discover process-profile settings.
             profile_config.unlink()
-            result = json.loads(entry.handler({'command': ['echo'], 'description': 'synthetic'}))
-            self.assertIs(result['success'], False)
-            self.assertIn('requester token', result['error'])
-            self.assertEqual(len(seen), 1)
-            # Nor may an invalid selected credential fall back to the valid process file.
+            self.assertEqual(plugin._load_yaml_config(), {})
+            missing_scope = set_secret_scope({}, profile_home=str(profile))
+            try:
+                result = json.loads(entry.handler({'command': ['echo'], 'description': 'synthetic'}))
+                self.assertIs(result['success'], False)
+                self.assertIn('requester token', result['error'])
+                self.assertEqual(len(seen), 1)
+            finally:
+                reset_secret_scope(missing_scope)
+            # Even a valid managed token cannot silently mask a legacy selector.
             profile_config.write_text(f'auth_token_file: {profile / "missing.token"}\n')
-            with self.assertRaisesRegex(ValueError, 'private owned regular file'):
+            with self.assertRaisesRegex(ValueError, 'removed.*HOSTD_AUTH_TOKEN'):
                 plugin._build_client()
         finally:
+            process_env.stop()
+            reset_secret_scope(scope)
             reset_hermes_home_override(override)
             process_config.unlink(missing_ok=True)
             profile_config.unlink(missing_ok=True)

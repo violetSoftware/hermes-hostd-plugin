@@ -10,6 +10,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
+# Import runtime APIs only, never the launcher or profile secret stores.
+sys.path.insert(0, os.environ.get('HOSTD_TEST_HERMES_SOURCE', '/usr/local/lib/hermes-agent'))
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('auth_plugin', ROOT / '__init__.py', submodule_search_locations=[str(ROOT)])
 assert spec is not None and spec.loader is not None
@@ -58,41 +60,56 @@ class ClientAuthTests(unittest.TestCase):
                         self.assertEqual(built.transport.auth_token, TOKEN)
                         self.assertNotIn(TOKEN, repr(built.transport))
 
-    def test_secret_file_precedence_failure_and_explicit_insecure(self):
-        with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as home:
+    def test_bundled_library_has_no_credential_file_api_or_legacy_token_alias(self):
+        self.assertFalse(hasattr(client, 'read_token_file'))
+        with self.assertRaises(TypeError):
+            client.client_from_config(http_auth_token=TOKEN)
+
+    def test_legacy_file_selectors_are_rejected_without_target_access(self):
+        with tempfile.TemporaryDirectory() as home:
             path = Path(home) / 'requester.token'
             path.write_text(TOKEN + '\n')
             path.chmod(0o600)
-            with patch.dict(os.environ, {'HERMES_HOME': home}, clear=True), patch.dict(
-                    plugin._PLUGIN_SETTINGS, {'auth_token_file': str(path)}, clear=True):
-                self.assertEqual(plugin._build_client().transport.auth_token, TOKEN)
-                config = Path(home) / 'hostd-client.yaml'
-                config.write_text('auth_token_file: /nonexistent-synthetic-token\n')
-                with self.assertRaisesRegex(ValueError, 'private owned regular file'):
-                    plugin._build_client()
-                with patch.dict(os.environ, {'HOSTD_AUTH_TOKEN_FILE': str(path)}):
-                    self.assertEqual(plugin._build_client().transport.auth_token, TOKEN)
-                    with patch.dict(os.environ, {'HOSTD_AUTH_TOKEN': 'synthetic-env-priority'}):
-                        self.assertEqual(plugin._build_client().transport.auth_token, 'synthetic-env-priority')
-                    with patch.dict(os.environ, {'HOSTD_AUTH_TOKEN': ''}):
-                        with self.assertRaises(ValueError):
-                            plugin._build_client()
-                plugin._PLUGIN_SETTINGS.clear()
-                config.write_text('insecure_no_auth: true\n')
-                with self.assertLogs(level='WARNING'):
-                    self.assertIsNone(plugin._build_client().transport.auth_token)
-                for invalid in ('TRUE', '1', 'yes', 'null', ''):
-                    config.write_text('insecure_no_auth: ' + invalid + '\n')
-                    with self.assertRaises(ValueError):
-                        plugin._build_client()
-            path.chmod(0o644)
-            with self.assertRaises(ValueError):
-                client.read_token_file(path)
-            path.chmod(0o600)
             link = Path(home) / 'link'
             link.symlink_to(path)
+            config = Path(home) / 'hostd-client.yaml'
+            with patch.dict(os.environ, {'HERMES_HOME': home, 'HOSTD_AUTH_TOKEN': TOKEN}, clear=True):
+                for source in ('settings', 'flat', 'environment'):
+                    for target in (str(path), str(link), str(Path(home) / 'missing'), ''):
+                        with self.subTest(source=source, target=bool(target)), patch.dict(
+                                plugin._PLUGIN_SETTINGS, {}, clear=True), patch.dict(os.environ):
+                            config.unlink(missing_ok=True)
+                            if source == 'settings':
+                                plugin._PLUGIN_SETTINGS['auth_token_file'] = target
+                            elif source == 'flat':
+                                config.write_text('auth_token_file: ' + target + '\n')
+                            else:
+                                os.environ['HOSTD_AUTH_TOKEN_FILE'] = target
+                            # Legacy targets must never be stat'ed, opened or resolved.
+                            original = Path.open
+                            def guarded_open(selected, *args, **kwargs):
+                                if selected != config:
+                                    raise AssertionError('credential target opened')
+                                return original(selected, *args, **kwargs)
+                            with patch.object(Path, 'open', guarded_open), patch.object(
+                                    os, 'open', side_effect=AssertionError('credential target opened')):
+                                with self.assertRaisesRegex(ValueError, 'removed.*HOSTD_AUTH_TOKEN'):
+                                    plugin._build_client()
+
+    def test_explicit_insecure_is_not_selected_by_missing_credentials(self):
+        with tempfile.TemporaryDirectory() as home, patch.dict(
+                os.environ, {'HERMES_HOME': home}, clear=True), patch.dict(
+                plugin._PLUGIN_SETTINGS, {}, clear=True):
             with self.assertRaises(ValueError):
-                client.read_token_file(link)
+                plugin._build_client()
+            config = Path(home) / 'hostd-client.yaml'
+            config.write_text('insecure_no_auth: true\n')
+            with self.assertLogs(level='WARNING'):
+                self.assertIsNone(plugin._build_client().transport.auth_token)
+            for invalid in ('TRUE', '1', 'yes', 'null', ''):
+                config.write_text('insecure_no_auth: ' + invalid + '\n')
+                with self.assertRaises(ValueError):
+                    plugin._build_client()
 
     def test_unsafe_url_and_secret_echo_errors_are_not_exposed(self):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

@@ -31,7 +31,7 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:19998:127.0.0.1:9998 operator@ho
 
 `host.example` is a placeholder. The operator authenticates SSH and verifies the host key outside the plugin. The command stays foregrounded; the plugin does not create, keep alive or restart it. Configure the plugin endpoint as `http://127.0.0.1:19998/execute`, using the supplied client example or manifest-backed settings. This example deliberately uses local listening port **19998**, distinct from fallback port **9998**; the forward's remote destination is the daemon's host-loopback port **9998**.
 
-Both examples require a separately provisioned requester token. Configure the private file path in both daemon and client, or use protected process environment sources. Missing credentials fail closed; an insecure mode is available only through explicit acknowledgment. Follow [requester authentication](requester-auth.md) for generation, provisioning, migration and the plaintext hops remaining around SSH/TLS. No tunnel, listener, host request or approval was created here.
+Both examples require a separately provisioned requester token. Keep the daemon's private token-file configuration unchanged; provision the same requester token as `HOSTD_AUTH_TOKEN` through Hermes's profile-managed secrets interface for the plugin. Client credential-file selectors are removed in rc2 and must be deleted, not merely overridden. Missing credentials fail closed; an insecure mode is available only through explicit acknowledgment. Follow [requester authentication](requester-auth.md) for generation, provisioning, migration and the plaintext hops remaining around SSH/TLS. No tunnel, listener, host request or approval was created here.
 
 ## VSOCK
 

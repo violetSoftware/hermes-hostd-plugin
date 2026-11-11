@@ -12,6 +12,7 @@ from unittest.mock import patch
 import sys
 import unittest
 
+sys.path.insert(0, os.environ.get('HOSTD_TEST_HERMES_SOURCE', '/usr/local/lib/hermes-agent'))
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('response_plugin', ROOT / '__init__.py', submodule_search_locations=[str(ROOT)])
 assert spec is not None and spec.loader is not None

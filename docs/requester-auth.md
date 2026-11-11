@@ -1,7 +1,8 @@
 # Requester authentication and migration
 
 HTTP and VSOCK require a requester token by default, before command allocation,
-approval or execution. Missing/empty/malformed credentials fail startup; missing
+approval or execution. Missing/empty/malformed daemon credentials fail startup; the
+plugin validates its managed credential at call time. Missing
 or incorrect wire credentials fail closed. No token is generated automatically.
 This intentionally breaks older unauthenticated callers. Upgrade the separate
 plugin and daemon together, provision the same secret at both ends, and then
@@ -18,8 +19,8 @@ hostd create-token /absolute/private/directory/requester.token
 This uses Python `secrets.token_urlsafe(32)` (32 random bytes), creates a new 0600
 file, prints no token and refuses to overwrite an existing file or symlink.
 It does not start the daemon or modify configuration. Provision a copy to the
-client through an operator-controlled secure file transfer outside the agent's
-conversation, Git and tool results. The client must be able to read its own
+client's Hermes-managed secrets through an operator-controlled secure channel
+outside the agent's conversation, Git and tool results. The client must be able to read its own
 requester credential: it is not an operator-approval secret or protection from a
 compromised requester. Never copy ntfy operator/admin credentials to the client.
 Keep parent directories trusted/private; same-UID/root processes can read tokens.
@@ -46,27 +47,50 @@ is retained for programmatic/private-config compatibility, never a public
 example; file and inline sources together are rejected. An invalid selected
 source never falls back to another source or insecure mode.
 
-Plugin nonsecret settings are `auth_token_file` and `insecure_no_auth`, alongside
-transport/port/URL. Settings come from real `ctx.get_config`, with the existing
-flat `hostd-client.yaml` in the active Hermes home overriding them. The home is
-resolved at each call through `hermes_constants.get_hermes_home()`, including a
-context-local profile override in shared gateways; the process `HERMES_HOME`
-need not match. Missing selected configuration never falls back to another
-profile's file. Outside Hermes, `$HERMES_HOME` then `~/.hermes` remain supported.
-Hermes resolution/import failures do not select this standalone fallback.
-Credential precedence is
-`HOSTD_AUTH_TOKEN` (including an explicitly empty value, which fails), then
-`HOSTD_AUTH_TOKEN_FILE`, then the selected `auth_token_file` path. An explicitly
-empty/invalid selected file source fails closed, even with insecure mode enabled;
-remove the setting entirely to select no source. Valid higher-priority overrides
-still take precedence. Set secrets in
-the launching process's protected environment/profile secret mechanism, not in
-public plugin settings or command arguments. The plugin does not load `.env`
-itself. The flat legacy parser accepts unquoted scalar paths and exact lowercase
-`true`/`false`; it is not general YAML. No auth value is a model-facing tool field.
-Library callers pass `auth_token=` to `VsockClient`, `HttpClient` or
-`client_from_config`; legacy `http_auth_token=` remains an alias, and conflicting
-arguments fail. Direct constructors do not implicitly read environment secrets.
+## Plugin rc2 migration
+
+**Known break:** rc2 removes plugin credential-file sourcing, the bundled
+`read_token_file` API and the `http_auth_token` factory alias. The daemon is
+unchanged: its private file/environment configuration above remains supported.
+
+For an existing token-file deployment, the operator must:
+
+1. Securely provision the **same existing requester token** as `HOSTD_AUTH_TOKEN`
+   in the selected Hermes profile using Hermes's managed secrets interface.
+   Import/enter it outside chat, Git, command arguments and tool output. Do not
+   print or rotate it merely to migrate the client. Never import ntfy approver
+   credentials. Hermes, not this plugin, owns storage and profile resolution.
+2. Remove `auth_token_file` entirely from both the profile's flat
+   `hostd-client.yaml` and `plugins.entries.hostd-client.settings` (including a
+   legacy `config` subtree if used). Unset `HOSTD_AUTH_TOKEN_FILE` in the launcher.
+   Empty selectors are still selectors. **Any remaining selector is rejected,
+   even with a valid managed token or explicit insecure mode.** Their targets
+   are never opened, resolved or validated. The error names the removed setting
+   and the managed-secret replacement, never the path or its contents.
+3. Keep transport, port, URL and response-limit settings unchanged. Deploy/reload
+   the reviewed rc2 plugin separately, ensure the active profile has the secret,
+   and perform an attended harmless authenticated request. Keep the daemon's
+   existing private token configuration; no daemon upgrade or secret rotation is
+   required for this client-only migration.
+
+At each call the plugin lazily imports `get_secret` from `agent.secret_scope`
+and requests `get_secret('HOSTD_AUTH_TOKEN')`. There is no plugin-owned raw
+process-env, `.env`, token-file or credential-store fallback, and registration
+never captures a secret. Hermes may resolve single-profile process credentials
+as part of its own API contract; routed profiles use Hermes's scoped resolution,
+not another profile's process secret. Missing/empty/malformed credentials and
+import/resolution errors fail closed with bounded, value-free diagnostics.
+Hermes runtime APIs are required for plugin execution; standalone library callers
+instead supply `auth_token=` explicitly to `VsockClient`, `HttpClient` or
+`client_from_config`. The library reads no secret stores or environment variables.
+
+Nonsecret precedence is unchanged: transport environment overrides, then the flat
+active-profile file resolved at call time through `get_hermes_home`, then public
+`ctx.get_config` settings, then defaults. Standalone nonsecret home lookup still
+supports `$HERMES_HOME`, then `~/.hermes` only when Hermes is absent. Hermes
+resolution/import failures do not select a different profile. The flat parser
+accepts unquoted scalar values and exact lowercase `true`/`false`, not general
+YAML. No credential is a model-facing tool field.
 
 ## Explicit insecure acknowledgment
 
@@ -78,7 +102,12 @@ transport:
   insecure_no_auth: true
 ```
 
-For the plugin set `insecure_no_auth: true` in its nonsecret settings/flat file;
+The plugin retains `insecure_no_auth: true` in its nonsecret settings/flat file
+for explicit manual compatibility, but this is **not a catalog setup path**:
+`requires_env: [HOSTD_AUTH_TOKEN]` truthfully declares authenticated default
+availability. Hermes may mark the tool unavailable without that credential, and
+supplying the credential plus insecure mode is rejected. Do not configure a dummy
+secret to bypass availability checks. For an explicitly invoked plugin handler,
 for direct library callers pass `insecure_no_auth=True`. Each endpoint warns
 `INSECURE` and still requires the normal approval. Supplying a token and insecure
 mode together is an error. This permits legacy ordinary no-auth operations, not

@@ -41,7 +41,7 @@ class PortabilityTests(unittest.TestCase):
             env["NO_PROXY"] = "127.0.0.1"
             result = subprocess.run(
                 [sys.executable, "-I", "-B", str(SOURCE / "tests" / "isolated_probe.py"),
-                 str(plugin)], cwd=root, env=env, capture_output=True, text=True,
+                 str(plugin), os.environ.get('HOSTD_TEST_HERMES_SOURCE', '/usr/local/lib/hermes-agent')], cwd=root, env=env, capture_output=True, text=True,
                 timeout=20,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

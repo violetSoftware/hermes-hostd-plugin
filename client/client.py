@@ -25,9 +25,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import uuid
-import os
 import re
-import stat
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, field
@@ -83,21 +81,6 @@ def _validate_token(value):
     return value
 
 
-def read_token_file(path):
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.geteuid():
-                raise ValueError('unsafe file')
-            raw = stream.read(258)
-        if raw.endswith(b'\n'):
-            raw = raw[:-1]
-        return _validate_token(raw.decode('ascii'))
-    except (OSError, ValueError, TypeError, UnicodeError):
-        raise ValueError('cannot read requester token from private owned regular file') from None
-
-
 def _credential(token, insecure_no_auth):
     if type(insecure_no_auth) is not bool:
         raise ValueError('insecure_no_auth must be an explicit boolean')
@@ -107,7 +90,7 @@ def _credential(token, insecure_no_auth):
         logging.getLogger(__name__).warning('INSECURE: requester authentication explicitly disabled')
         return None
     if token is None:
-        raise ValueError('requester token required; configure a private token source or explicitly set insecure_no_auth: true')
+        raise ValueError('requester token required; configure HOSTD_AUTH_TOKEN in Hermes managed secrets or pass auth_token explicitly')
     return _validate_token(token)
 
 
@@ -380,7 +363,7 @@ class HostdClient:
 
     Usage::
 
-        transport = VsockClient(port=9999)
+        transport = VsockClient(port=9999, auth_token=operator_supplied_token)
         client = HostdClient(transport)
         result = client.send_request(CommandRequest(command=["ls", "-la"], description="list files"))
         print(result.stdout)
@@ -433,7 +416,6 @@ def client_from_config(
     vsock_port: int = 9999,
     http_url: str = HttpClient.DEFAULT_URL,
     timeout: Optional[float] = 30.0,
-    http_auth_token: Optional[str] = None,
     auth_token: Optional[str] = None,
     insecure_no_auth: bool = False,
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
@@ -449,21 +431,17 @@ def client_from_config(
             the timeout entirely — use for long-running commands like large
             package installs/downloads where the command's own timeout is
             also set to 0 (no timeout).
-        http_auth_token: legacy alias for auth_token; do not pass both.
         auth_token: required requester token for either transport.
         max_response_bytes: positive finite body-byte ceiling, including framing whitespace.
         insecure_no_auth: explicit unsafe no-token mode; emits a warning.
     """
     if timeout is not None and timeout <= 0:
         timeout = None
-    if auth_token is not None and http_auth_token is not None:
-        raise ValueError('choose one requester token argument')
-    token = auth_token if auth_token is not None else http_auth_token
     if transport == "vsock":
-        return HostdClient(VsockClient(port=vsock_port, timeout=timeout, auth_token=token,
+        return HostdClient(VsockClient(port=vsock_port, timeout=timeout, auth_token=auth_token,
                                       insecure_no_auth=insecure_no_auth, max_response_bytes=max_response_bytes))
     elif transport == "http":
-        return HostdClient(HttpClient(url=http_url, timeout=timeout, auth_token=token,
+        return HostdClient(HttpClient(url=http_url, timeout=timeout, auth_token=auth_token,
                                      insecure_no_auth=insecure_no_auth, max_response_bytes=max_response_bytes))
     else:
         raise ValueError(f"Unknown transport {transport!r}. Use 'vsock' or 'http'.")

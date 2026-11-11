@@ -3,13 +3,13 @@ hostd-client Hermes plugin
 Registers tools for running commands on the Incus host via the hermes-hostd
 daemon, which provides out-of-band approval through ntfy before execution.
 
-Configuration is read from (in priority order):
+Credentials: HOSTD_AUTH_TOKEN from Hermes get_secret at call time only.
+Legacy auth_token_file / HOSTD_AUTH_TOKEN_FILE selectors are rejected.
+Nonsecret configuration is read from (in priority order):
   1. Environment variables:
        HOSTD_TRANSPORT   vsock | http        (default: vsock)
        HOSTD_VSOCK_PORT  integer             (default: 9999)
        HOSTD_HTTP_URL    full URL string     (default: http://127.0.0.1:9998/execute)
-       HOSTD_AUTH_TOKEN  secret requester token (both transports)
-       HOSTD_AUTH_TOKEN_FILE private requester-token file (below token env)
   2. Flat compatibility config: active Hermes home / hostd-client.yaml
        (context-local profile first; standalone: $HERMES_HOME, then ~/.hermes)
        transport: vsock
@@ -96,13 +96,18 @@ def _load_yaml_config() -> Dict[str, Any]:
 
 
 def _build_client(socket_timeout: float | None = 30.0):
-    """Build a HostdClient from environment variables or YAML config.
+    """Build a client using managed secrets and nonsecret environment/config.
 
     socket_timeout: transport-level timeout in seconds. Pass None or <= 0
     to disable it (matches a CommandRequest.timeout of 0 for long
     installs/downloads where the process itself may run far past 30s).
     """
     yaml_cfg = {**_PLUGIN_SETTINGS, **_load_yaml_config()}
+    if 'HOSTD_AUTH_TOKEN_FILE' in os.environ or 'auth_token_file' in yaml_cfg:
+        raise ValueError(
+            'Credential file selectors were removed; remove auth_token_file and '
+            'HOSTD_AUTH_TOKEN_FILE, then configure HOSTD_AUTH_TOKEN in Hermes managed secrets'
+        )
 
     transport = (
         os.environ.get("HOSTD_TRANSPORT")
@@ -126,21 +131,24 @@ def _build_client(socket_timeout: float | None = 30.0):
         or yaml_cfg.get("http_url", _client_mod.HttpClient.DEFAULT_URL)
     )
 
-    # Secret value is never a public plugin setting or a model-facing argument.
-    # Environment source explicitly overrides a configured private file.
-    if 'HOSTD_AUTH_TOKEN' in os.environ:
-        token = os.environ['HOSTD_AUTH_TOKEN']
-    elif 'HOSTD_AUTH_TOKEN_FILE' in os.environ:
-        token = _client_mod.read_token_file(os.environ['HOSTD_AUTH_TOKEN_FILE'])
-    elif 'auth_token_file' in yaml_cfg:
-        token = _client_mod.read_token_file(yaml_cfg['auth_token_file'])
-    else:
-        token = None
+    # Resolve at call time through Hermes, never through plugin-owned stores or
+    # raw process-env reads. Do not expose import/resolver exception contents.
+    try:
+        from agent.secret_scope import get_secret
+        token = get_secret('HOSTD_AUTH_TOKEN')
+    except Exception:
+        raise ValueError(
+            'Hermes could not resolve HOSTD_AUTH_TOKEN for this profile; '
+            'check the managed secret and active profile scope'
+        ) from None
     insecure = yaml_cfg.get('insecure_no_auth', False)
     if isinstance(insecure, str):
         if insecure not in ('true', 'false'):
             raise ValueError('insecure_no_auth must be true or false')
         insecure = insecure == 'true'
+    if not insecure:
+        # Fail before creating any transport; validation diagnostics never echo values.
+        _client_mod._credential(token, False)
     response_limit = yaml_cfg.get('max_response_bytes', _client_mod.DEFAULT_MAX_RESPONSE_BYTES)
     if isinstance(response_limit, str):
         if not response_limit.isascii() or not response_limit.isdecimal():
@@ -274,6 +282,7 @@ def register(ctx):
     _PLUGIN_SETTINGS.clear()
     get_config = getattr(ctx, "get_config", None)
     if callable(get_config):
+        # Read the removed selector only to reject stale configs; never open it.
         for key in ("transport", "vsock_port", "http_url", "auth_token_file", "insecure_no_auth", "max_response_bytes"):
             value = get_config(key, None)
             if value is not None:

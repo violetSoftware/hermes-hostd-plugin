@@ -6,7 +6,7 @@ Version 0.1.0rc1 is a **local release checkpoint**, not a published or accepted 
 
 The manifest requests Hermes >=0.22.5; this range is not a tested compatibility matrix. Use a current Hermes installation and run the validation commands below. Keep `plugin.yaml`, `__init__.py` and the complete `client/` directory together. Once installation is separately authorized, copy this source package to the selected profile's `plugins/hostd-client/`; then use `hermes -p PROFILE plugins enable hostd-client` and `hermes -p PROFILE tools enable hostd --platform cli` (enable other platforms only deliberately). This checkpoint does not install, enable or reload anything.
 
-The manifest declares nonsecret settings under `plugins.entries.hostd-client.settings`: `transport` (`vsock` or `http`), `vsock_port` (integer, default 9999), and `http_url` (full `/execute` URL). Configure them through Hermes's plugin settings UI or approved config CLI, not by putting credentials in URLs. Settings are captured during registration; changes require a supported plugin reload or fresh process. `auth_token_file` selects a private secret file and `insecure_no_auth` is an explicit unsafe opt-out. `optional_env` also declares secret process sources `HOSTD_AUTH_TOKEN` / `HOSTD_AUTH_TOKEN_FILE`; `requires_env` is empty because a private token file is an alternative to an environment source; credentials are still required by default.
+The manifest declares nonsecret settings under `plugins.entries.hostd-client.settings`: `transport` (`vsock` or `http`), `vsock_port` (integer, default 9999), and `http_url` (full `/execute` URL). Configure them through Hermes's plugin settings UI or approved config CLI, not by putting credentials in URLs. Settings are captured during registration; changes require a supported plugin reload or fresh process. The required credential is `HOSTD_AUTH_TOKEN`, declared in `requires_env` and resolved lazily through Hermes's `agent.secret_scope.get_secret` at each call. Configure it through Hermes's profile-managed secrets interface, not in plugin settings, a plugin-owned file or a tool argument. The plugin never reads a credential store, `.env`, token file or raw token environment variable itself. Hermes owns source resolution and routed-profile isolation; its single-profile environment support remains Hermes behavior, not a plugin fallback. `insecure_no_auth` remains an explicit unsafe manual/library compatibility option; catalog/default availability still requires the managed credential, and a token plus insecure mode is an error. See the [rc2 migration steps](docs/requester-auth.md#plugin-rc2-migration).
 
 Precedence, highest first:
 
@@ -22,7 +22,7 @@ and responses without Location. Configure the actual `/execute` endpoint; the
 client never sends the request, bearer token or body to a redirect destination.
 The error reports status only, not Location or the redirect response body.
 Timeouts and urllib's normal proxy/TLS handling are unchanged. See [required requester authentication and migration](docs/requester-auth.md)
-for private token sourcing on both transports. See [response validation](docs/responses.md)
+for Hermes-managed credential sourcing on both transports. See [response validation](docs/responses.md)
 for strict types, exact request correlation, preserved log/additive metadata and
 the configurable finite `max_response_bytes` ceiling (default 1 MiB).
 
@@ -30,7 +30,7 @@ The legacy parser supports only unquoted flat `key: value` lines and whole-line 
 
 ## Daemon setup is separate
 
-See [daemon setup](docs/daemon-setup.md) for terminal approval, externally managed HTTP-over-SSH, and VSOCK. This plugin neither installs nor starts the daemon, SSH, a reverse proxy or a background service. It does not manage SSH keys. Both transports forward requester credentials from private file/environment sources; see [provisioning and migration](docs/requester-auth.md). Never put secret values in plugin settings, URLs or examples.
+See [daemon setup](docs/daemon-setup.md) for terminal approval, externally managed HTTP-over-SSH, and VSOCK. This plugin neither installs nor starts the daemon, SSH, a reverse proxy or a background service. It does not manage SSH keys. Both transports forward the call-time Hermes-managed requester credential; see [provisioning and migration](docs/requester-auth.md). Never put secret values in plugin settings, URLs or examples.
 
 ## Intentional breaking removal
 
@@ -93,18 +93,20 @@ From any checkout:
 python -B -m unittest discover -s tests -v
 ```
 
-The stdlib harness honors `TMPDIR`, falling back to `tempfile.gettempdir()`. It relocates source, starts `python -I -B` with an empty fixture `HERMES_HOME`, blocks legacy checkout/config access and global client imports, and checks unchanged `sys.path`. It exercises registration, configuration precedence, missing-client errors, removal of mount convenience APIs, ordinary inert Incus argv and a real HTTP POST to an inert `127.0.0.1` fixture. The fixture never executes commands or requests approval. The definition regression additionally requires an installed Hermes runtime at `/usr/local/lib/hermes-agent` (override with `HOSTD_TEST_HERMES_SOURCE`) and that runtime's Python dependencies. It uses the real public `PluginContext` and `registry.get_definitions` in a fresh process with disposable `HOME`/`HERMES_HOME`, denies network/subprocess activity and out-of-fixture writes, and checks the sole supported tool, absence of removed registrations and manifest promises, argument types, required fields and exactly one provider wrapper. Unrelated bundled model-provider discovery is excluded from that probe.
+The harness requires the installed Hermes secret-scope API (it is not a standalone stdlib-only plugin runtime). It honors `TMPDIR`, falling back to `tempfile.gettempdir()`. It relocates source, starts `python -I -B` with an empty fixture `HERMES_HOME`, blocks legacy checkout/config access and global client imports, and checks unchanged `sys.path`. It exercises registration, configuration precedence, missing-client errors, removal of mount convenience APIs, ordinary inert Incus argv and a real HTTP POST to an inert `127.0.0.1` fixture. The fixture never executes commands or requests approval. The tests require an installed Hermes runtime at `/usr/local/lib/hermes-agent` (override with `HOSTD_TEST_HERMES_SOURCE`) and that runtime's Python dependencies. It uses the real public `PluginContext` and `registry.get_definitions` in a fresh process with disposable `HOME`/`HERMES_HOME`, restricts network to inert loopback and denies subprocess activity and out-of-fixture writes, and checks the sole supported tool, absence of removed registrations and manifest promises, argument types, required fields and exactly one provider wrapper. Unrelated bundled model-provider discovery is excluded from that probe.
 
 Catalog validation normally uses `hermes plugins validate /path/to/checkout --json`. Run it only in a separately authorized, disposable environment: the full Hermes launcher can perform startup maintenance and load environment/configuration outside the checkout. Do not add `--install-deps` without separate permission. The stdlib suite above does not exercise the catalog validator or full launcher. Passing local checks is not live daemon, VSOCK, SSH, phone approval or full clean-install acceptance.
 
-MIT licensed by Violet Software. Public repository setup, catalog admission and publication are separate future steps; no published upgrade is implied. Do not commit runtime configuration, credentials, private topics, logs or environments.
+MIT licensed by Violet Software. Source repository: https://github.com/violetSoftware/hermes-hostd-plugin. Catalog admission and deployment remain separate steps. Do not commit runtime configuration, credentials, private topics, logs or environments.
 
 ## Candidate status and deployment boundary
 
-This is the initial coordinated **0.1.0rc1** public-source candidate. Earlier
-private checkpoints used different versions; this is not a published upgrade.
+This is **0.1.0rc2**, a breaking credential-source migration from rc1.
+Existing token-file deployments must provision the Hermes-managed secret and remove
+all legacy client file selectors before calling the upgraded plugin.
 Copyright 2026 Violet Software. Distributed under the [MIT License](LICENSE).
-Install from the local source/artifact; no public repository URL is assumed.
+Source: https://github.com/violetSoftware/hermes-hostd-plugin. Installation and
+live acceptance are separate from source tests.
 
 Linux is the implementation target (Linux process groups/subreaper, flock and
 PTY behavior). Python metadata permits >=3.10; candidate checks use Python 3.14.9

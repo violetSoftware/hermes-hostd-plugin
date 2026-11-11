@@ -3,5 +3,5 @@
 transport: vsock
 vsock_port: 9999
 
-# Provision a matching private requester-token file (0600) outside Git.
-auth_token_file: /absolute/private/directory/requester.token
+# Configure matching HOSTD_AUTH_TOKEN through Hermes profile-managed secrets.
+# No client token-file selector: rc2 rejects auth_token_file / HOSTD_AUTH_TOKEN_FILE.

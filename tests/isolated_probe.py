@@ -14,7 +14,10 @@ from unittest.mock import patch
 
 
 PLUGIN = Path(sys.argv.pop(1))
-os.environ["HOSTD_AUTH_TOKEN"] = "synthetic-isolation"
+RUNTIME = Path(sys.argv.pop(1))
+sys.path.insert(0, str(RUNTIME))
+from agent.secret_scope import set_secret_scope, reset_secret_scope
+SCOPE = set_secret_scope({'HOSTD_AUTH_TOKEN': 'synthetic-isolation'})
 # Supplied by the parent harness; never fall back to a real checkout path.
 FORBIDDEN_ROOTS = tuple(json.loads(os.environ["HOSTD_TEST_FORBIDDEN_ROOTS"]))
 assert FORBIDDEN_ROOTS and all(isinstance(root, str) and os.path.isabs(root)
