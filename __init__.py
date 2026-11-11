@@ -10,7 +10,8 @@ Configuration is read from (in priority order):
        HOSTD_HTTP_URL    full URL string     (default: http://127.0.0.1:9998/execute)
        HOSTD_AUTH_TOKEN  secret requester token (both transports)
        HOSTD_AUTH_TOKEN_FILE private requester-token file (below token env)
-  2. Flat compatibility config: $HERMES_HOME/hostd-client.yaml
+  2. Flat compatibility config: active Hermes home / hostd-client.yaml
+       (context-local profile first; standalone: $HERMES_HOME, then ~/.hermes)
        transport: vsock
        vsock_port: 9999
        http_url: http://127.0.0.1:9998/execute
@@ -63,7 +64,17 @@ _PLUGIN_SETTINGS: Dict[str, Any] = {}
 
 def _load_yaml_config() -> Dict[str, Any]:
     """Load hostd-client.yaml from the active Hermes profile home."""
-    hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    try:
+        from hermes_constants import get_hermes_home
+    except ModuleNotFoundError as exc:
+        if exc.name != "hermes_constants":
+            raise
+        # Standalone use without Hermes retains the environment/home contract.
+        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    else:
+        # Resolve at call time: shared gateways route profiles via contextvars.
+        # Resolver failures must not silently select the process/default profile.
+        hermes_home = get_hermes_home()
     config_path = hermes_home / "hostd-client.yaml"
     if not config_path.exists():
         return {}

@@ -379,6 +379,75 @@ class DefinitionTests(unittest.TestCase):
                 self.assertEqual(plugin._build_client().transport.max_response_bytes, 512)
         plugin._PLUGIN_SETTINGS.clear()
 
+    def test_context_home_overrides_process_home_at_handler_time(self):
+        import json
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from unittest.mock import patch
+        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+
+        process_home = Path(os.environ['HERMES_HOME'])
+        profile = HOME / 'routed-profile'
+        profile.mkdir()
+        process_config = process_home / 'hostd-client.yaml'
+        profile_config = profile / 'hostd-client.yaml'
+        process_secret = process_home / 'process.token'
+        profile_secret = profile / 'profile.token'
+        for path, token in ((process_secret, 'synthetic-process-only'),
+                            (profile_secret, 'synthetic-profile-only')):
+            path.write_text(token + '\n')
+            path.chmod(0o600)
+        seen = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                seen.append(self.headers.get('Authorization'))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({'id': body['id'], 'approved': False}).encode())
+            def log_message(self, format, *args): pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        url = f'http://127.0.0.1:{server.server_port}/execute'
+        for config, secret in ((process_config, process_secret), (profile_config, profile_secret)):
+            config.write_text(f'transport: http\nhttp_url: {url}\nauth_token_file: {secret}\n')
+        assert manifest is not None
+        context = PluginContext(manifest, manager)
+        # Register in the process profile first: resolution must not be cached here.
+        with patch('hermes_cli.plugins.load_config_readonly', return_value={}):
+            plugin.register(context)
+        entry = registry.get_entry('run_on_host')
+        assert entry is not None
+        override = set_hermes_home_override(profile)
+        try:
+            self.assertEqual(os.environ['HERMES_HOME'], str(process_home))
+            self.assertEqual(get_hermes_home(), profile)
+            result = entry.handler({'command': ['echo'], 'description': 'synthetic'})
+            self.assertIs(json.loads(result)['approved'], False)
+            self.assertEqual(seen, ['Bearer synthetic-profile-only'])
+            self.assertNotIn('synthetic-profile-only', result)
+            self.assertNotIn('synthetic-process-only', result)
+            # Missing selected config must not fall back to the process token/file.
+            profile_config.unlink()
+            result = json.loads(entry.handler({'command': ['echo'], 'description': 'synthetic'}))
+            self.assertIs(result['success'], False)
+            self.assertIn('requester token', result['error'])
+            self.assertEqual(len(seen), 1)
+            # Nor may an invalid selected credential fall back to the valid process file.
+            profile_config.write_text(f'auth_token_file: {profile / "missing.token"}\n')
+            with self.assertRaisesRegex(ValueError, 'private owned regular file'):
+                plugin._build_client()
+        finally:
+            reset_hermes_home_override(override)
+            process_config.unlink(missing_ok=True)
+            profile_config.unlink(missing_ok=True)
+            plugin._PLUGIN_SETTINGS.clear()
+            server.shutdown()
+            server.server_close()
+            thread.join(2)
+        self.assertEqual(get_hermes_home(), process_home)
+
     def test_removed_tools_have_no_registry_entry_or_manifest_promise(self):
         assert manifest is not None
         self.assertEqual(manifest.provides_tools, ['run_on_host'])

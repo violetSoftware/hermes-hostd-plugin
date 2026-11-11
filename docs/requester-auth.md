@@ -48,7 +48,13 @@ source never falls back to another source or insecure mode.
 
 Plugin nonsecret settings are `auth_token_file` and `insecure_no_auth`, alongside
 transport/port/URL. Settings come from real `ctx.get_config`, with the existing
-flat `$HERMES_HOME/hostd-client.yaml` overriding them. Credential precedence is
+flat `hostd-client.yaml` in the active Hermes home overriding them. The home is
+resolved at each call through `hermes_constants.get_hermes_home()`, including a
+context-local profile override in shared gateways; the process `HERMES_HOME`
+need not match. Missing selected configuration never falls back to another
+profile's file. Outside Hermes, `$HERMES_HOME` then `~/.hermes` remain supported.
+Hermes resolution/import failures do not select this standalone fallback.
+Credential precedence is
 `HOSTD_AUTH_TOKEN` (including an explicitly empty value, which fails), then
 `HOSTD_AUTH_TOKEN_FILE`, then the selected `auth_token_file` path. An explicitly
 empty/invalid selected file source fails closed, even with insecure mode enabled;

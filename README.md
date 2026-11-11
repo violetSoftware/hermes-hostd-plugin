@@ -11,7 +11,7 @@ The manifest declares nonsecret settings under `plugins.entries.hostd-client.set
 Precedence, highest first:
 
 1. `HOSTD_TRANSPORT`, `HOSTD_VSOCK_PORT`, `HOSTD_HTTP_URL` in the launching process.
-2. Flat compatibility file `$HERMES_HOME/hostd-client.yaml` (`~/.hermes` only when `HERMES_HOME` is unset).
+2. Flat compatibility file `hostd-client.yaml` in the active Hermes home, resolved at each call through `hermes_constants.get_hermes_home()` (context-local profile override, then `HERMES_HOME`, then Hermes's platform default). Shared gateways need not change the process environment to select a profile. Standalone use without Hermes retains `$HERMES_HOME`, then `~/.hermes`. A missing selected file does not trigger discovery in another profile; a Hermes resolver/import failure does not silently select the process home.
 3. Manifest-backed settings read through `ctx.get_config` at registration.
 4. Built-in defaults: transport `vsock`, CID 2, port 9999; HTTP URL `http://127.0.0.1:9998/execute` when HTTP is selected. There is no automatic fallback between transports.
 
