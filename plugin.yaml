@@ -9,7 +9,8 @@ platforms: [linux]
 tags: [incus, host, approval, vsock]
 provides_tools:
   - run_on_host
-provides_hooks: []
+provides_hooks:
+  - pre_tool_call
 # No built-in override, LLM override or gateway platform-action grants.
 # Remote command authority is disclosed in README; it is not a capability ID.
 capabilities: []

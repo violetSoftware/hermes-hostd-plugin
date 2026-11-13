@@ -174,6 +174,9 @@ class IsolatedPluginTests(unittest.TestCase):
             def register_tool(self, *, name, toolset, schema, handler):
                 self.tools.append((name, toolset, schema, handler))
 
+            def register_hook(self, name, callback):
+                assert name == "pre_tool_call" and callable(callback)
+
         ctx = Context()
         self.plugin.register(ctx)
         self.assertEqual([tool[0] for tool in ctx.tools],
@@ -240,6 +243,9 @@ class IsolatedPluginTests(unittest.TestCase):
 
             def register_tool(self, **kwargs):
                 pass
+
+            def register_hook(self, name, callback):
+                assert name == "pre_tool_call" and callable(callback)
 
         self.plugin.register(Context())
         self.addCleanup(lambda: getattr(self.plugin, "_PLUGIN_SETTINGS", {}).clear())

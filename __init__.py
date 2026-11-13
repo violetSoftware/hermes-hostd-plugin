@@ -169,6 +169,20 @@ def _build_client(socket_timeout: float | None = 30.0):
 # Tool handlers
 # ---------------------------------------------------------------------------
 
+def _require_host_approval(tool_name: str, args=None, **kwargs):
+    """Escalate host commands to Hermes policy before contacting the daemon."""
+    if tool_name != "run_on_host":
+        return None
+    # JSON preserves argv boundaries and escapes control characters. Include all
+    # submitted metadata without interpreting it as shell syntax or policy.
+    return {
+        "action": "approve",
+        "message": "Host command request (argv and description):\n" + json.dumps(
+            args if isinstance(args, dict) else {}, ensure_ascii=True),
+        "rule_key": "run_on_host",
+    }
+
+
 def _handle_run_on_host(args: Dict[str, Any]) -> str:
     if not _CLIENT_AVAILABLE:
         return json.dumps({
@@ -279,6 +293,7 @@ _SCHEMA_RUN_ON_HOST = {
 
 def register(ctx):
     """Called by Hermes when the plugin is loaded."""
+    ctx.register_hook("pre_tool_call", _require_host_approval)
     _PLUGIN_SETTINGS.clear()
     get_config = getattr(ctx, "get_config", None)
     if callable(get_config):

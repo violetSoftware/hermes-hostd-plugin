@@ -58,6 +58,46 @@ FUNCTIONS = {item["function"]["name"]: item["function"] for item in DEFINITIONS}
 
 
 class DefinitionTests(unittest.TestCase):
+    def test_registered_hook_uses_native_gate_before_daemon_dispatch(self):
+        import json
+        from unittest.mock import patch
+        from hermes_cli.plugins import resolve_pre_tool_block
+        assert manifest is not None
+        self.assertIn('pre_tool_call', manifest.provides_hooks)
+        callbacks = manager._hooks['pre_tool_call']
+        self.assertTrue(callbacks)
+        args = {'command': ['echo', 'two words'], 'description': 'synthetic host action'}
+        def invoke(name, **kwargs):
+            self.assertEqual(name, 'pre_tool_call')
+            return [callback(**kwargs) for callback in callbacks]
+        entry = registry.get_entry('run_on_host')
+        assert entry is not None
+        def dispatch():
+            blocked = resolve_pre_tool_block('run_on_host', args)
+            return blocked if blocked else entry.handler(args)
+        with patch('hermes_cli.lifecycle.invoke_hook', side_effect=invoke):
+            for decision in ({'approved': False, 'message': 'denied'},
+                             {'approved': False, 'message': 'timed out'},
+                             RuntimeError('synthetic gate failure')):
+                with self.subTest(decision=decision):
+                    with patch('tools.approval.request_tool_approval') as gate, \
+                         patch.object(plugin, '_build_client') as build:
+                        if isinstance(decision, Exception):
+                            gate.side_effect = decision
+                        else:
+                            gate.return_value = decision
+                        self.assertTrue(dispatch())
+                        gate.assert_called_once()
+                        self.assertEqual(gate.call_args.kwargs['rule_key'], 'run_on_host')
+                        self.assertIn(json.dumps(args['command']), gate.call_args.args[1])
+                        build.assert_not_called()
+            # Native approval permits dispatch, but never overrides daemon denial.
+            with patch('tools.approval.request_tool_approval', return_value={'approved': True}), \
+                 patch.object(plugin, '_build_client') as build:
+                build.return_value.send_request.return_value.to_json.return_value = '{"approved": false}'
+                self.assertIs(json.loads(dispatch())['approved'], False)
+                build.return_value.send_request.assert_called_once()
+
     def test_managed_secret_is_resolved_lazily_for_each_routed_call(self):
         from agent.secret_scope import set_secret_scope, reset_secret_scope
         from hermes_constants import set_hermes_home_override, reset_hermes_home_override
