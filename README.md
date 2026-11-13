@@ -10,10 +10,20 @@ The manifest declares nonsecret settings under `plugins.entries.hostd-client.set
 
 Precedence, highest first:
 
-1. `HOSTD_TRANSPORT`, `HOSTD_VSOCK_PORT`, `HOSTD_HTTP_URL` in the launching process.
-2. Flat compatibility file `hostd-client.yaml` in the active Hermes home, resolved at each call through `hermes_constants.get_hermes_home()` (context-local profile override, then `HERMES_HOME`, then Hermes's platform default). Shared gateways need not change the process environment to select a profile. Standalone use without Hermes retains `$HERMES_HOME`, then `~/.hermes`. A missing selected file does not trigger discovery in another profile; a Hermes resolver/import failure does not silently select the process home.
-3. Manifest-backed settings read through `ctx.get_config` at registration.
-4. Built-in defaults: transport `vsock`, CID 2, port 9999; HTTP URL `http://127.0.0.1:9998/execute` when HTTP is selected. There is no automatic fallback between transports.
+1. Flat compatibility file `hostd-client.yaml` in the active Hermes home, resolved at each call through `hermes_constants.get_hermes_home()` (context-local profile override, then `HERMES_HOME`, then Hermes's platform default). Shared gateways need not change the process environment to select a profile. Standalone use without Hermes retains `$HERMES_HOME`, then `~/.hermes`. A missing selected file does not trigger discovery in another profile; a Hermes resolver/import failure does not silently select the process home.
+2. Manifest-backed settings read through `ctx.get_config` at registration.
+3. Built-in defaults: transport `vsock`, CID 2, port 9999; HTTP URL `http://127.0.0.1:9998/execute` when HTTP is selected. There is no automatic fallback between transports.
+
+**Transport configuration migration:** `HOSTD_TRANSPORT`, `HOSTD_VSOCK_PORT` and
+`HOSTD_HTTP_URL` environment overrides have been removed. Stale values are ignored,
+including invalid values; they neither override profile settings nor cause an
+error. Move their intended values to `transport`, `vsock_port` and `http_url` in
+the selected profile's plugin settings or its flat `hostd-client.yaml`, then
+remove the obsolete launcher variables. The flat file remains supported and wins
+over native settings. Reload native setting changes through a supported plugin
+reload or fresh process. Defaults, managed `HOSTD_AUTH_TOKEN` resolution and
+rejection of removed credential-file selectors are unchanged. This source change
+does not edit live configuration, install or reload anything.
 
 HTTP loopback refers to the **machine/network namespace running Hermes**, not the physical host when Hermes runs in a VM/container. Selecting `http` needs no URL override if a local daemon already listens at the fallback endpoint. Otherwise explicitly configure the daemon endpoint, or establish an external SSH local forward and configure the URL to match its local listening port. The plugin does not establish tunnels automatically. The documented SSH example uses local port **19998**, so its URL is `http://127.0.0.1:19998/execute`, not the fallback port 9998.
 

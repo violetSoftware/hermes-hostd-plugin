@@ -196,12 +196,51 @@ class IsolatedPluginTests(unittest.TestCase):
         self.assertEqual(client_mod.client_from_config(transport="http", auth_token="synthetic-isolation").transport.url,
                          expected_url)
         self.assertEqual(self.plugin._PLUGIN_SETTINGS, {})
-        with patch.dict(os.environ, {"HOSTD_TRANSPORT": "http"}):
+        with patch.dict(self.plugin._PLUGIN_SETTINGS, {"transport": "http"}, clear=True):
             self.assertEqual(self.plugin._build_client().transport.url, expected_url)
         for client in (client_mod.client_from_config(auth_token='synthetic-isolation'), self.plugin._build_client()):
             self.assertIsInstance(client.transport, client_mod.VsockClient)
             self.assertEqual(client.transport.port, 9999)
             self.assertEqual(client.transport.HOST_CID, 2)
+
+    def test_stale_transport_environment_is_ignored_for_all_config_sources(self):
+        client_mod = self.plugin._client_mod
+        config = Path(os.environ['HERMES_HOME']) / 'hostd-client.yaml'
+        self.addCleanup(lambda: config.unlink(missing_ok=True))
+        stale_values = (
+            {'HOSTD_TRANSPORT': 'http', 'HOSTD_VSOCK_PORT': '1234',
+             'HOSTD_HTTP_URL': 'http://127.0.0.1:1234/stale'},
+            {'HOSTD_TRANSPORT': 'vsock', 'HOSTD_VSOCK_PORT': '2345',
+             'HOSTD_HTTP_URL': 'http://127.0.0.1:2345/stale'},
+            {'HOSTD_TRANSPORT': 'invalid', 'HOSTD_VSOCK_PORT': 'invalid',
+             'HOSTD_HTTP_URL': 'invalid'},
+        )
+        cases = (
+            ({}, {}, 'vsock', 9999),
+            ({'transport': 'http'}, {}, 'http', client_mod.HttpClient.DEFAULT_URL),
+            ({'transport': 'vsock', 'vsock_port': 4567}, {}, 'vsock', 4567),
+            ({'transport': 'http', 'http_url': 'http://127.0.0.1:4567/execute'},
+             {}, 'http', 'http://127.0.0.1:4567/execute'),
+            ({'transport': 'http', 'vsock_port': 4567},
+             {'transport': 'vsock', 'vsock_port': 7654}, 'vsock', 7654),
+            ({'transport': 'vsock', 'http_url': 'http://127.0.0.1:4567/execute'},
+             {'transport': 'http', 'http_url': 'http://127.0.0.1:7654/execute'},
+             'http', 'http://127.0.0.1:7654/execute'),
+        )
+        for settings, flat, kind, expected in cases:
+            config.unlink(missing_ok=True)
+            if flat:
+                config.write_text(''.join(f'{key}: {value}\n' for key, value in flat.items()))
+            for stale in stale_values:
+                with self.subTest(settings=settings, flat=flat, stale=stale), patch.dict(
+                        self.plugin._PLUGIN_SETTINGS, settings, clear=True), patch.dict(os.environ, stale):
+                    transport = self.plugin._build_client().transport
+                    if kind == 'http':
+                        self.assertIsInstance(transport, client_mod.HttpClient)
+                        self.assertEqual(transport.url, expected)
+                    else:
+                        self.assertIsInstance(transport, client_mod.VsockClient)
+                        self.assertEqual(transport.port, expected)
 
     def test_manifest_defaults_match_runtime(self):
         # Read only the manifest's simple scalar defaults; no YAML dependency.
@@ -231,11 +270,11 @@ class IsolatedPluginTests(unittest.TestCase):
         with patch.dict(self.plugin._PLUGIN_SETTINGS, defaults, clear=True):
             self.assertIsInstance(self.plugin._build_client().transport,
                                   client_mod.VsockClient)
-            with patch.dict(os.environ, {"HOSTD_TRANSPORT": "http"}):
+            with patch.dict(self.plugin._PLUGIN_SETTINGS, {"transport": "http"}):
                 self.assertEqual(self.plugin._build_client().transport.url,
                                  client_mod.HttpClient.DEFAULT_URL)
 
-    def test_declared_settings_are_used_below_legacy_file_and_environment(self):
+    def test_declared_settings_are_used_below_active_profile_file(self):
         class Context:
             def get_config(self, key, default=None):
                 return {"transport": "http", "vsock_port": 4567,
@@ -267,10 +306,6 @@ class IsolatedPluginTests(unittest.TestCase):
         self.assertEqual(client.transport.port, 7654)
         config.write_text(f"transport: http\nhttp_url: {explicit_url}\n", encoding="utf-8")
         self.assertEqual(self.plugin._build_client().transport.url, explicit_url)
-        with patch.dict(os.environ, {"HOSTD_TRANSPORT": "http",
-                                    "HOSTD_HTTP_URL": "http://127.0.0.1:9876/execute"}):
-            self.assertEqual(self.plugin._build_client().transport.url,
-                             "http://127.0.0.1:9876/execute")
 
     def test_run_handler_round_trips_over_real_loopback_http(self):
         captured = []
@@ -299,10 +334,10 @@ class IsolatedPluginTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                with patch.dict(os.environ, {
-                    "HOSTD_TRANSPORT": "http",
-                    "HOSTD_HTTP_URL": f"http://127.0.0.1:{server.server_port}/execute",
-                }):
+                with patch.dict(self.plugin._PLUGIN_SETTINGS, {
+                    "transport": "http",
+                    "http_url": f"http://127.0.0.1:{server.server_port}/execute",
+                }, clear=True):
                     result = json.loads(self.plugin._handle_run_on_host({
                         "description": "inert loopback acceptance fixture",
                         "command": ["fixture-only", "argument with spaces"], "timeout": 7,

@@ -67,7 +67,12 @@ For an existing token-file deployment, the operator must:
    even with a valid managed token or explicit insecure mode.** Their targets
    are never opened, resolved or validated. The error names the removed setting
    and the managed-secret replacement, never the path or its contents.
-3. Keep transport, port, URL and response-limit settings unchanged. Deploy/reload
+3. Keep profile-owned transport, port, URL and response-limit settings unchanged.
+   If transport values came from `HOSTD_TRANSPORT`, `HOSTD_VSOCK_PORT` or
+   `HOSTD_HTTP_URL`, move them to `transport`, `vsock_port` or `http_url` in the
+   profile's plugin settings or flat `hostd-client.yaml`; those environment
+   overrides are now ignored, even when invalid. Remove the obsolete launcher
+   variables. Deploy/reload
    the reviewed rc2 plugin separately, ensure the active profile has the secret,
    and perform an attended harmless authenticated request. Keep the daemon's
    existing private token configuration; no daemon upgrade or secret rotation is
@@ -84,8 +89,8 @@ Hermes runtime APIs are required for plugin execution; standalone library caller
 instead supply `auth_token=` explicitly to `VsockClient`, `HttpClient` or
 `client_from_config`. The library reads no secret stores or environment variables.
 
-Nonsecret precedence is unchanged: transport environment overrides, then the flat
-active-profile file resolved at call time through `get_hermes_home`, then public
+Nonsecret precedence is the flat active-profile file resolved at call time
+through `get_hermes_home`, then public
 `ctx.get_config` settings, then defaults. Standalone nonsecret home lookup still
 supports `$HERMES_HOME`, then `~/.hermes` only when Hermes is absent. Hermes
 resolution/import failures do not select a different profile. The flat parser

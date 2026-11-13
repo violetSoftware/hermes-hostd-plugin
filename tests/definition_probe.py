@@ -114,7 +114,7 @@ class DefinitionTests(unittest.TestCase):
                     scope = set_secret_scope({'HOSTD_AUTH_TOKEN': token}, profile_home=str(profile))
                     try:
                         for transport in ('http', 'vsock'):
-                            with patch.dict(os.environ, {'HOSTD_TRANSPORT': transport}):
+                            with patch.dict(plugin._PLUGIN_SETTINGS, {'transport': transport}, clear=True):
                                 self.assertTrue(plugin._build_client().transport.auth_token == token)
                     finally:
                         reset_secret_scope(scope)
@@ -147,6 +147,7 @@ class DefinitionTests(unittest.TestCase):
         text = (PLUGIN / 'plugin.yaml').read_text()
         optional = text.split('optional_env:', 1)[1].split('python_dependencies:', 1)[0]
         self.assertNotIn('HOSTD_AUTH_TOKEN', optional)
+        self.assertEqual(optional.strip(), '[]')
         self.assertNotIn('auth_token_file', manifest.config_schema)
         self.assertEqual(manifest.version, '0.1.0rc2')
 
@@ -252,7 +253,7 @@ class DefinitionTests(unittest.TestCase):
         entry = registry.get_entry('run_on_host')
         assert entry is not None
         try:
-            with patch.dict(os.environ, {'HOSTD_HTTP_URL': f'http://127.0.0.1:{server.server_port}/execute'}):
+            with patch.dict(plugin._PLUGIN_SETTINGS, {'http_url': f'http://127.0.0.1:{server.server_port}/execute'}):
                 result = entry.handler({'command': ['echo'], 'description': 'synthetic'})
             self.assertNotIn(token, result)
             self.assertEqual(seen[0][0], 'Bearer ' + token)
@@ -283,7 +284,7 @@ class DefinitionTests(unittest.TestCase):
             def recv(self, size): return self.sock.recv(size)
             def close(self): self.sock.close()
         try:
-            with patch.dict(os.environ, {'HOSTD_TRANSPORT': 'vsock'}), patch.object(
+            with patch.dict(plugin._PLUGIN_SETTINGS, {'transport': 'vsock'}), patch.object(
                     plugin._client_mod.socket, 'socket', side_effect=lambda *a, **k:
                         LoopbackSocket() if a and a[0] == socket.AF_VSOCK else real_socket(*a, **k)):
                 result = entry.handler({'command': ['echo'], 'description': 'synthetic'})
@@ -333,8 +334,8 @@ class DefinitionTests(unittest.TestCase):
         logging.getLogger().addHandler(handler)
         try:
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-                with patch.dict(os.environ, {'HOSTD_TRANSPORT': 'http',
-                        'HOSTD_HTTP_URL': f'http://127.0.0.1:{server.server_port}/execute'}):
+                with patch.dict(plugin._PLUGIN_SETTINGS, {'transport': 'http',
+                        'http_url': f'http://127.0.0.1:{server.server_port}/execute'}):
                     http_result = entry.handler({'command': ['echo'], 'description': 'synthetic'})
                 left, right = socket.socketpair()
                 def receive():
@@ -352,7 +353,7 @@ class DefinitionTests(unittest.TestCase):
                     def recv(self, size): return left.recv(size)
                     def close(self): left.close()
                 try:
-                    with patch.dict(os.environ, {'HOSTD_TRANSPORT': 'vsock'}), patch.object(
+                    with patch.dict(plugin._PLUGIN_SETTINGS, {'transport': 'vsock'}), patch.object(
                             plugin._client_mod.socket, 'socket', side_effect=lambda *a, **k:
                                 StreamSocket() if a and a[0] == socket.AF_VSOCK else real_socket(*a, **k)):
                         vsock_result = entry.handler({'command': ['echo'], 'description': 'synthetic'})
@@ -404,7 +405,7 @@ class DefinitionTests(unittest.TestCase):
                     scope = set_secret_scope(mapping, profile_home=str(profile))
                     try:
                         for transport in ('http', 'vsock'):
-                            with patch.dict(os.environ, {'HOSTD_TRANSPORT': transport}), contextlib.redirect_stdout(
+                            with patch.dict(plugin._PLUGIN_SETTINGS, {'transport': transport}, clear=True), contextlib.redirect_stdout(
                                     output), contextlib.redirect_stderr(output):
                                 result = entry.handler({'command': ['echo']})
                             parsed = json.loads(result)
@@ -506,7 +507,7 @@ class DefinitionTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-                seen.append(self.headers.get('Authorization'))
+                seen.append((self.path, self.headers.get('Authorization')))
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(json.dumps({'id': body['id'], 'approved': False}).encode())
@@ -515,36 +516,56 @@ class DefinitionTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
         url = f'http://127.0.0.1:{server.server_port}/execute'
-        for config in (process_config, profile_config):
-            config.write_text(f'transport: http\nhttp_url: {url}\n')
+        process_config.write_text(f'transport: http\nhttp_url: {url}/process\n')
+        profile_config.write_text(f'transport: http\nhttp_url: {url}/profile\n')
         assert manifest is not None
         context = PluginContext(manifest, manager)
         # Register in the process profile first: resolution must not be cached here.
-        with patch('hermes_cli.plugins.load_config_readonly', return_value={}):
+        native_settings = {'plugins': {'entries': {'hostd-client': {'settings': {
+            'transport': 'vsock', 'vsock_port': 7654,
+            'http_url': 'http://127.0.0.1:4567/native'}}}}}
+        with patch('hermes_cli.plugins.load_config_readonly', return_value=native_settings):
             plugin.register(context)
         entry = registry.get_entry('run_on_host')
         assert entry is not None
         override = set_hermes_home_override(profile)
         scope = set_secret_scope({'HOSTD_AUTH_TOKEN': profile_token}, profile_home=str(profile))
-        process_env = patch.dict(os.environ, {'HOSTD_AUTH_TOKEN': process_token})
+        process_env = patch.dict(os.environ, {'HOSTD_AUTH_TOKEN': process_token,
+            'HOSTD_TRANSPORT': 'vsock', 'HOSTD_VSOCK_PORT': '1234',
+            'HOSTD_HTTP_URL': 'http://127.0.0.1:1234/stale'})
         process_env.start()
         try:
             self.assertEqual(os.environ['HERMES_HOME'], str(process_home))
             self.assertEqual(get_hermes_home(), profile)
             result = entry.handler({'command': ['echo'], 'description': 'synthetic'})
             self.assertIs(json.loads(result)['approved'], False)
-            self.assertEqual(seen, ['Bearer synthetic-profile-only'])
+            self.assertEqual(seen, [('/execute/profile', 'Bearer synthetic-profile-only')])
             self.assertNotIn('synthetic-profile-only', result)
             self.assertNotIn('synthetic-process-only', result)
+            # The same registered handler routes back to the process profile,
+            # selecting its endpoint and scoped credential, then restores routing.
+            process_override = set_hermes_home_override(process_home)
+            process_scope = set_secret_scope({'HOSTD_AUTH_TOKEN': process_token},
+                                             profile_home=str(process_home))
+            try:
+                result = json.loads(entry.handler({'command': ['echo']}))
+                self.assertIs(result['approved'], False)
+                self.assertEqual(seen[-1], ('/execute/process', 'Bearer synthetic-process-only'))
+            finally:
+                reset_secret_scope(process_scope)
+                reset_hermes_home_override(process_override)
             # Missing selected config must not discover process-profile settings.
             profile_config.unlink()
             self.assertEqual(plugin._load_yaml_config(), {})
+            fallback = plugin._build_client().transport
+            self.assertIsInstance(fallback, plugin._client_mod.VsockClient)
+            self.assertEqual(fallback.port, 7654)
             missing_scope = set_secret_scope({}, profile_home=str(profile))
             try:
                 result = json.loads(entry.handler({'command': ['echo'], 'description': 'synthetic'}))
                 self.assertIs(result['success'], False)
                 self.assertIn('requester token', result['error'])
-                self.assertEqual(len(seen), 1)
+                self.assertEqual(len(seen), 2)
             finally:
                 reset_secret_scope(missing_scope)
             # Even a valid managed token cannot silently mask a legacy selector.

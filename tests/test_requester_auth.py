@@ -55,8 +55,10 @@ class ClientAuthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as home:
             with patch.dict(os.environ, {'HERMES_HOME': home, 'HOSTD_AUTH_TOKEN': TOKEN}, clear=True):
                 for transport in ('http', 'vsock'):
-                    with patch.dict(os.environ, {'HOSTD_TRANSPORT': transport}):
+                    with patch.dict(plugin._PLUGIN_SETTINGS, {'transport': transport}, clear=True):
                         built = plugin._build_client()
+                        self.assertIsInstance(built.transport,
+                            client.HttpClient if transport == 'http' else client.VsockClient)
                         self.assertEqual(built.transport.auth_token, TOKEN)
                         self.assertNotIn(TOKEN, repr(built.transport))
 

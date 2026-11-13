@@ -6,17 +6,13 @@ daemon, which provides out-of-band approval through ntfy before execution.
 Credentials: HOSTD_AUTH_TOKEN from Hermes get_secret at call time only.
 Legacy auth_token_file / HOSTD_AUTH_TOKEN_FILE selectors are rejected.
 Nonsecret configuration is read from (in priority order):
-  1. Environment variables:
-       HOSTD_TRANSPORT   vsock | http        (default: vsock)
-       HOSTD_VSOCK_PORT  integer             (default: 9999)
-       HOSTD_HTTP_URL    full URL string     (default: http://127.0.0.1:9998/execute)
-  2. Flat compatibility config: active Hermes home / hostd-client.yaml
+  1. Flat compatibility config: active Hermes home / hostd-client.yaml
        (context-local profile first; standalone: $HERMES_HOME, then ~/.hermes)
        transport: vsock
        vsock_port: 9999
        http_url: http://127.0.0.1:9998/execute
-  3. Public ctx.get_config settings declared in plugin.yaml (captured at registration)
-  4. Built-in defaults (transport remains vsock; no automatic transport fallback)
+  2. Public ctx.get_config settings declared in plugin.yaml (captured at registration)
+  3. Built-in defaults (transport remains vsock; no automatic transport fallback)
 
 HTTP loopback is the machine/network namespace running Hermes, not the physical
 host when Hermes runs in a VM/container. A local daemon at the default endpoint
@@ -59,7 +55,7 @@ except ImportError as exc:
 # ---------------------------------------------------------------------------
 
 # Profile-owned nonsecret settings captured through the public plugin context.
-# Legacy file and environment overrides retain their existing precedence.
+# The active-profile compatibility file takes precedence over these settings.
 _PLUGIN_SETTINGS: Dict[str, Any] = {}
 
 def _load_yaml_config() -> Dict[str, Any]:
@@ -96,7 +92,7 @@ def _load_yaml_config() -> Dict[str, Any]:
 
 
 def _build_client(socket_timeout: float | None = 30.0):
-    """Build a client using managed secrets and nonsecret environment/config.
+    """Build a client using managed secrets and profile-owned nonsecret config.
 
     socket_timeout: transport-level timeout in seconds. Pass None or <= 0
     to disable it (matches a CommandRequest.timeout of 0 for long
@@ -109,15 +105,9 @@ def _build_client(socket_timeout: float | None = 30.0):
             'HOSTD_AUTH_TOKEN_FILE, then configure HOSTD_AUTH_TOKEN in Hermes managed secrets'
         )
 
-    transport = (
-        os.environ.get("HOSTD_TRANSPORT")
-        or yaml_cfg.get("transport", "vsock")
-    ).lower()
+    transport = yaml_cfg.get("transport", "vsock").lower()
 
-    vsock_port_raw = (
-        os.environ.get("HOSTD_VSOCK_PORT")
-        or yaml_cfg.get("vsock_port", "9999")
-    )
+    vsock_port_raw = yaml_cfg.get("vsock_port", "9999")
     try:
         vsock_port = int(vsock_port_raw)
     except (TypeError, ValueError):
@@ -126,10 +116,7 @@ def _build_client(socket_timeout: float | None = 30.0):
     # The HTTP fallback is Hermes-local loopback, not a VM/container's host.
     # Configure the daemon URL or an externally established SSH forward's local
     # port unless a local daemon already matches the default. No automatic tunnel.
-    http_url = (
-        os.environ.get("HOSTD_HTTP_URL")
-        or yaml_cfg.get("http_url", _client_mod.HttpClient.DEFAULT_URL)
-    )
+    http_url = yaml_cfg.get("http_url", _client_mod.HttpClient.DEFAULT_URL)
 
     # Resolve at call time through Hermes, never through plugin-owned stores or
     # raw process-env reads. Do not expose import/resolver exception contents.

@@ -16,10 +16,7 @@ provides_hooks:
 capabilities: []
 # Authenticated catalog/default operation requires this Hermes-managed secret.
 requires_env: [HOSTD_AUTH_TOKEN]
-optional_env:
-  - HOSTD_TRANSPORT
-  - HOSTD_VSOCK_PORT
-  - HOSTD_HTTP_URL
+optional_env: []
 
 python_dependencies: []
 config_schema:
@@ -38,12 +35,12 @@ config_schema:
     type: str
     default: vsock
     required: false
-    description: "Transport: vsock or http. Legacy hostd-client.yaml and HOSTD_TRANSPORT take precedence."
+    description: "Transport: vsock or http. The active-profile hostd-client.yaml takes precedence; transport environment overrides are ignored."
   vsock_port:
     type: int
     default: 9999
     required: false
-    description: "Host CID 2 VSOCK port. Must match the separately managed daemon."
+    description: "Host CID 2 VSOCK port. Must match the separately managed daemon. The active-profile hostd-client.yaml takes precedence."
   http_url:
     type: str
     # Loopback is the Hermes machine/network namespace, not a VM/container's host.
@@ -56,4 +53,5 @@ config_schema:
       override is needed for a local daemon at the default endpoint. Otherwise
       explicitly configure the daemon endpoint, or establish an external SSH local
       forward and configure this URL to match its local listening port. The plugin
-      does not establish tunnels automatically. No credentials in URLs.
+      does not establish tunnels automatically. The active-profile hostd-client.yaml
+      takes precedence. No credentials in URLs.
